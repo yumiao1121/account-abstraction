@@ -31,7 +31,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
     // marker for inner call revert on out of gas
     bytes32 private constant INNER_OUT_OF_GAS = hex'deaddead';
 
-    uint256 private constant REVERT_REASON_MAX_LEN = 2048;
+    uint256 private constant REVERT_REASON_MAX_LEN = 2048; //daewoo: revert的原因
 
     /**
      * for simulation purposes, validateUserOp (and validatePaymasterUserOp) must return this value
@@ -77,7 +77,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
             }
 
             uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
-            collected = _handlePostOp(opIndex, IPaymaster.PostOpMode.postOpReverted, opInfo, context, actualGas);
+            collected = _handlePostOp(opIndex, IPaymaster.PostOpMode.postOpReverted, opInfo, context, actualGas); // daewoo: 注意这里执行失败也是需要用户向paymaster支付代扣的gasfee
         }
     }
 
@@ -89,23 +89,27 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * @param ops the operations to execute
      * @param beneficiary the address to receive the fees
      */
+     // daewoo: 该方法的调用不会用到聚合签名，如果某个account需要用到聚合签名时，在执行simulateValidation时会返回对应的聚合签名合约地址，
+     // 并通过调用handleAggregatedOps进行处理
     function handleOps(UserOperation[] calldata ops, address payable beneficiary) public nonReentrant {
 
-        uint256 opslen = ops.length;
-        UserOpInfo[] memory opInfos = new UserOpInfo[](opslen);
+        uint256 opslen = ops.length; 
+        UserOpInfo[] memory opInfos = new UserOpInfo[](opslen); 
 
-    unchecked {
+    unchecked { // daewoo: 不进行溢出检测
+        // daewoo: 完成所有的验证
         for (uint256 i = 0; i < opslen; i++) {
             UserOpInfo memory opInfo = opInfos[i];
             (uint256 validationData, uint256 pmValidationData) = _validatePrepayment(i, ops[i], opInfo);
-            _validateAccountAndPaymasterValidationData(i, validationData, pmValidationData, address(0));
+            _validateAccountAndPaymasterValidationData(i, validationData, pmValidationData, address(0)); // daewoo: 用于获取聚合签名合约地址进行判断
         }
 
         uint256 collected = 0;
         emit BeforeExecution();
 
+        // daewoo: 开始执行userOp
         for (uint256 i = 0; i < opslen; i++) {
-            collected += _executeUserOp(i, ops[i], opInfos[i]);
+            collected += _executeUserOp(i, ops[i], opInfos[i]); // daewoo: collected表示实际消耗的gas
         }
 
         _compensate(beneficiary, collected);
@@ -132,7 +136,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
             //address(1) is special marker of "signature error"
             require(address(aggregator) != address(1), "AA96 invalid aggregator");
 
-            if (address(aggregator) != address(0)) {
+            if (address(aggregator) != address(0)) { // daewoo: 表示有聚合签名合约地址
                 // solhint-disable-next-line no-empty-blocks
                 try aggregator.validateSignatures(ops, opa.signature) {}
                 catch {
@@ -205,20 +209,20 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
     struct MemoryUserOp {
         address sender;
         uint256 nonce;
-        uint256 callGasLimit;
-        uint256 verificationGasLimit;
-        uint256 preVerificationGas;
-        address paymaster;
+        uint256 callGasLimit;           //daewoo: 允许执行main execution call花费的Gas
+        uint256 verificationGasLimit;   //daewoo: 允许在verification花费的Gas
+        uint256 preVerificationGas;     //daewoo: 用于对bundler预验证execution和calldata费用的补偿
+        address paymaster;              //daewoo: 第三方支付地址
         uint256 maxFeePerGas;
         uint256 maxPriorityFeePerGas;
     }
 
     struct UserOpInfo {
-        MemoryUserOp mUserOp;
-        bytes32 userOpHash;
-        uint256 prefund;
+        MemoryUserOp mUserOp;   // daewoo: UserOp数据拷贝到内存中
+        bytes32 userOpHash; 
+        uint256 prefund;    // daewoo: all gas Limit * gasPrice
         uint256 contextOffset;
-        uint256 preOpGas;
+        uint256 preOpGas;   // daewoo: 
     }
 
     /**
@@ -227,19 +231,20 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      */
     function innerHandleOp(bytes memory callData, UserOpInfo memory opInfo, bytes calldata context) external returns (uint256 actualGasCost) {
         uint256 preGas = gasleft();
-        require(msg.sender == address(this), "AA92 internal call only");
+        require(msg.sender == address(this), "AA92 internal call only"); // daewoo: 限制自身调用
         MemoryUserOp memory mUserOp = opInfo.mUserOp;
 
         uint callGasLimit = mUserOp.callGasLimit;
-    unchecked {
-        // handleOps was called with gas limit too low. abort entire bundle.
-        if (gasleft() < callGasLimit + mUserOp.verificationGasLimit + 5000) {
-            assembly {
-                mstore(0, INNER_OUT_OF_GAS)
-                revert(0, 32)
+        unchecked {
+            // handleOps was called with gas limit too low. abort entire bundle.
+            // 如果当前gasleft不足，放弃全部的userop执行
+            if (gasleft() < callGasLimit + mUserOp.verificationGasLimit + 5000) {
+                assembly {
+                    mstore(0, INNER_OUT_OF_GAS)
+                    revert(0, 32)
+                }
             }
         }
-    }
 
         IPaymaster.PostOpMode mode = IPaymaster.PostOpMode.opSucceeded;
         if (callData.length > 0) {
@@ -249,15 +254,15 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
                 if (result.length > 0) {
                     emit UserOperationRevertReason(opInfo.userOpHash, mUserOp.sender, mUserOp.nonce, result);
                 }
-                mode = IPaymaster.PostOpMode.opReverted;
+                mode = IPaymaster.PostOpMode.opReverted; // daewoo: 标记用户层面的执行失败
             }
         }
 
-    unchecked {
-        uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
-        //note: opIndex is ignored (relevant only if mode==postOpReverted, which is only possible outside of innerHandleOp)
-        return _handlePostOp(0, mode, opInfo, context, actualGas);
-    }
+        unchecked {
+            uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
+            //note: opIndex is ignored (relevant only if mode==postOpReverted, which is only possible outside of innerHandleOp)
+            return _handlePostOp(0, mode, opInfo, context, actualGas);
+        }
     }
 
     /**
@@ -279,10 +284,10 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         mUserOp.preVerificationGas = userOp.preVerificationGas;
         mUserOp.maxFeePerGas = userOp.maxFeePerGas;
         mUserOp.maxPriorityFeePerGas = userOp.maxPriorityFeePerGas;
-        bytes calldata paymasterAndData = userOp.paymasterAndData;
+        bytes calldata   = userOp.paymasterAndData;
         if (paymasterAndData.length > 0) {
             require(paymasterAndData.length >= 20, "AA93 invalid paymasterAndData");
-            mUserOp.paymaster = address(bytes20(paymasterAndData[: 20]));
+            mUserOp.paymaster = address(bytes20(paymasterAndData[: 20])); // daewoo: paymaster地址是前20位
         } else {
             mUserOp.paymaster = address(0);
         }
@@ -300,7 +305,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         _simulationOnlyValidations(userOp);
         (uint256 validationData, uint256 paymasterValidationData) = _validatePrepayment(0, userOp, outOpInfo);
         StakeInfo memory paymasterInfo = _getStakeInfo(outOpInfo.mUserOp.paymaster);
-        StakeInfo memory senderInfo = _getStakeInfo(outOpInfo.mUserOp.sender);
+        StakeInfo memory senderInfo = _getStakeInfo(outOpInfo.mUserOp.sender); // daewoo: 能够范围其他范围存储的地址都需要进行质押
         StakeInfo memory factoryInfo;
         {
             bytes calldata initCode = userOp.initCode;
@@ -323,27 +328,28 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
     }
 
     function _getRequiredPrefund(MemoryUserOp memory mUserOp) internal pure returns (uint256 requiredPrefund) {
-    unchecked {
-        //when using a Paymaster, the verificationGasLimit is used also to as a limit for the postOp call.
-        // our security model might call postOp eventually twice
-        uint256 mul = mUserOp.paymaster != address(0) ? 3 : 1;
-        uint256 requiredGas = mUserOp.callGasLimit + mUserOp.verificationGasLimit * mul + mUserOp.preVerificationGas;
+        unchecked {
+            //when using a Paymaster, the verificationGasLimit is used also to as a limit for the postOp call.
+            // our security model might call postOp eventually twice
+            // daewoo: 如果是paymaster需要3倍的verificationGasLimit
+            uint256 mul = mUserOp.paymaster != address(0) ? 3 : 1;
+            uint256 requiredGas = mUserOp.callGasLimit + mUserOp.verificationGasLimit * mul + mUserOp.preVerificationGas;
 
-        requiredPrefund = requiredGas * mUserOp.maxFeePerGas;
-    }
+            requiredPrefund = requiredGas * mUserOp.maxFeePerGas;
+        }
     }
 
     // create the sender's contract if needed.
     function _createSenderIfNeeded(uint256 opIndex, UserOpInfo memory opInfo, bytes calldata initCode) internal {
         if (initCode.length != 0) {
             address sender = opInfo.mUserOp.sender;
-            if (sender.code.length != 0) revert FailedOp(opIndex, "AA10 sender already constructed");
-            address sender1 = senderCreator.createSender{gas : opInfo.mUserOp.verificationGasLimit}(initCode);
+            if (sender.code.length != 0) revert FailedOp(opIndex, "AA10 sender already constructed"); // daewoo: 判断sender是否是已经创建的合约账户
+            address sender1 = senderCreator.createSender{gas : opInfo.mUserOp.verificationGasLimit}(initCode); // daewoo: 初始化一个合约钱包
             if (sender1 == address(0)) revert FailedOp(opIndex, "AA13 initCode failed or OOG");
             if (sender1 != sender) revert FailedOp(opIndex, "AA14 initCode must return sender");
             if (sender1.code.length == 0) revert FailedOp(opIndex, "AA15 initCode must create sender");
-            address factory = address(bytes20(initCode[0 : 20]));
-            emit AccountDeployed(opInfo.userOpHash, sender, factory, opInfo.mUserOp.paymaster);
+            address factory = address(bytes20(initCode[0 : 20])); // daewoo: 对应的钱包工厂地址
+            emit AccountDeployed(opInfo.userOpHash, sender, factory, opInfo.mUserOp.paymaster); // daewoo: 发出合约钱包创建事件
         }
     }
 
@@ -393,38 +399,39 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * revert (with FailedOp) in case validateUserOp reverts, or account didn't send required prefund.
      * decrement account's deposit if needed
      */
+     // daewoo: 如果 validateUserOp 回滚，或者账户未发送所需的preFund，则重试 (使用 FailedOp 异常)。在必要的情况下可以扣除账户资金
     function _validateAccountPrepayment(uint256 opIndex, UserOperation calldata op, UserOpInfo memory opInfo, uint256 requiredPrefund)
     internal returns (uint256 gasUsedByValidateAccountPrepayment, uint256 validationData) {
-    unchecked {
-        uint256 preGas = gasleft();
-        MemoryUserOp memory mUserOp = opInfo.mUserOp;
-        address sender = mUserOp.sender;
-        _createSenderIfNeeded(opIndex, opInfo, op.initCode);
-        address paymaster = mUserOp.paymaster;
-        numberMarker();
-        uint256 missingAccountFunds = 0;
-        if (paymaster == address(0)) {
-            uint256 bal = balanceOf(sender);
-            missingAccountFunds = bal > requiredPrefund ? 0 : requiredPrefund - bal;
-        }
-        try IAccount(sender).validateUserOp{gas : mUserOp.verificationGasLimit}(op, opInfo.userOpHash, missingAccountFunds)
-        returns (uint256 _validationData) {
-            validationData = _validationData;
-        } catch Error(string memory revertReason) {
-            revert FailedOp(opIndex, string.concat("AA23 reverted: ", revertReason));
-        } catch {
-            revert FailedOp(opIndex, "AA23 reverted (or OOG)");
-        }
-        if (paymaster == address(0)) {
-            DepositInfo storage senderInfo = deposits[sender];
-            uint256 deposit = senderInfo.deposit;
-            if (requiredPrefund > deposit) {
-                revert FailedOp(opIndex, "AA21 didn't pay prefund");
+        unchecked {
+            uint256 preGas = gasleft(); // daewoo: 记录当前gas
+            MemoryUserOp memory mUserOp = opInfo.mUserOp;
+            address sender = mUserOp.sender; // daewoo: 合约钱包地址
+            _createSenderIfNeeded(opIndex, opInfo, op.initCode); // daewoo: 如果对应的合约钱包不存在则需要进行创建
+            address paymaster = mUserOp.paymaster;
+            numberMarker();
+            uint256 missingAccountFunds = 0;
+            if (paymaster == address(0)) {
+                uint256 bal = balanceOf(sender); // daewoo: 获取合约钱包地址在EntryPoint中的deposit
+                missingAccountFunds = bal > requiredPrefund ? 0 : requiredPrefund - bal;
             }
-            senderInfo.deposit = uint112(deposit - requiredPrefund);
+            try IAccount(sender).validateUserOp{gas : mUserOp.verificationGasLimit}(op, opInfo.userOpHash, missingAccountFunds) // daewoo: 进行签名、nonce的校验，同时合约钱包向EntryPoints合约存入missingAccountFunds
+            returns (uint256 _validationData) {
+                validationData = _validationData;
+            } catch Error(string memory revertReason) {
+                revert FailedOp(opIndex, string.concat("AA23 reverted: ", revertReason));
+            } catch {
+                revert FailedOp(opIndex, "AA23 reverted (or OOG)");
+            }
+            if (paymaster == address(0)) { // daewoo: 没有第三方支付者
+                DepositInfo storage senderInfo = deposits[sender];
+                uint256 deposit = senderInfo.deposit;
+                if (requiredPrefund > deposit) {
+                    revert FailedOp(opIndex, "AA21 didn't pay prefund");
+                }
+                senderInfo.deposit = uint112(deposit - requiredPrefund); // daewoo: 预先扣除对应所需的fund
+            }
+            gasUsedByValidateAccountPrepayment = preGas - gasleft();
         }
-        gasUsedByValidateAccountPrepayment = preGas - gasleft();
-    }
     }
 
     /**
@@ -436,28 +443,28 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      */
     function _validatePaymasterPrepayment(uint256 opIndex, UserOperation calldata op, UserOpInfo memory opInfo, uint256 requiredPreFund, uint256 gasUsedByValidateAccountPrepayment)
     internal returns (bytes memory context, uint256 validationData) {
-    unchecked {
-        MemoryUserOp memory mUserOp = opInfo.mUserOp;
-        uint256 verificationGasLimit = mUserOp.verificationGasLimit;
-        require(verificationGasLimit > gasUsedByValidateAccountPrepayment, "AA41 too little verificationGas");
-        uint256 gas = verificationGasLimit - gasUsedByValidateAccountPrepayment;
+        unchecked {
+            MemoryUserOp memory mUserOp = opInfo.mUserOp;
+            uint256 verificationGasLimit = mUserOp.verificationGasLimit;
+            require(verificationGasLimit > gasUsedByValidateAccountPrepayment, "AA41 too little verificationGas");
+            uint256 gas = verificationGasLimit - gasUsedByValidateAccountPrepayment;
 
-        address paymaster = mUserOp.paymaster;
-        DepositInfo storage paymasterInfo = deposits[paymaster];
-        uint256 deposit = paymasterInfo.deposit;
-        if (deposit < requiredPreFund) {
-            revert FailedOp(opIndex, "AA31 paymaster deposit too low");
+            address paymaster = mUserOp.paymaster;
+            DepositInfo storage paymasterInfo = deposits[paymaster];
+            uint256 deposit = paymasterInfo.deposit;
+            if (deposit < requiredPreFund) {
+                revert FailedOp(opIndex, "AA31 paymaster deposit too low");
+            }
+            paymasterInfo.deposit = uint112(deposit - requiredPreFund);
+            try IPaymaster(paymaster).validatePaymasterUserOp{gas : gas}(op, opInfo.userOpHash, requiredPreFund) returns (bytes memory _context, uint256 _validationData){
+                context = _context;
+                validationData = _validationData;
+            } catch Error(string memory revertReason) {
+                revert FailedOp(opIndex, string.concat("AA33 reverted: ", revertReason));
+            } catch {
+                revert FailedOp(opIndex, "AA33 reverted (or OOG)");
+            }
         }
-        paymasterInfo.deposit = uint112(deposit - requiredPreFund);
-        try IPaymaster(paymaster).validatePaymasterUserOp{gas : gas}(op, opInfo.userOpHash, requiredPreFund) returns (bytes memory _context, uint256 _validationData){
-            context = _context;
-            validationData = _validationData;
-        } catch Error(string memory revertReason) {
-            revert FailedOp(opIndex, string.concat("AA33 reverted: ", revertReason));
-        } catch {
-            revert FailedOp(opIndex, "AA33 reverted (or OOG)");
-        }
-    }
     }
 
     /**
@@ -500,11 +507,12 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * @param opIndex the index of this userOp into the "opInfos" array
      * @param userOp the userOp to validate
      */
+     // daewoo: 验证account和paymaster， 确保验证所需Gas不超过verificationGasLimit，同时改方法的调用分为两种情况（链下simulateValidation()和链上handleOps())
     function _validatePrepayment(uint256 opIndex, UserOperation calldata userOp, UserOpInfo memory outOpInfo)
     private returns (uint256 validationData, uint256 paymasterValidationData) {
 
-        uint256 preGas = gasleft();
-        MemoryUserOp memory mUserOp = outOpInfo.mUserOp;
+        uint256 preGas = gasleft(); // daewoo: 当前剩余的gas
+        MemoryUserOp memory mUserOp = outOpInfo.mUserOp; 
         _copyUserOpToMemory(userOp, mUserOp);
         outOpInfo.userOpHash = getUserOpHash(userOp);
 
@@ -515,8 +523,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         require(maxGasValues <= type(uint120).max, "AA94 gas values overflow");
 
         uint256 gasUsedByValidateAccountPrepayment;
-        (uint256 requiredPreFund) = _getRequiredPrefund(mUserOp);
-        (gasUsedByValidateAccountPrepayment, validationData) = _validateAccountPrepayment(opIndex, userOp, outOpInfo, requiredPreFund);
+        (uint256 requiredPreFund) = _getRequiredPrefund(mUserOp); // daewoo: 计算交易指定的all gas * gasFee对应的value
+        (gasUsedByValidateAccountPrepayment, validationData) = _validateAccountPrepayment(opIndex, userOp, outOpInfo, requiredPreFund); // daewoo: 进行合约钱包、userOp、requiredFund的校验
 
         if (!_validateAndUpdateNonce(mUserOp.sender, mUserOp.nonce)) {
             revert FailedOp(opIndex, "AA25 invalid account nonce");
@@ -524,22 +532,26 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
 
         //a "marker" where account opcode validation is done and paymaster opcode validation is about to start
         // (used only by off-chain simulateValidation)
+        /*
+            daewoo: 这是一个用于off-chain simulateValidation的“标志”,其中account opcode 验证已经完成，
+            paymaster opcode 验证即将开始。(该标志仅用于off-chain simulateValidation)
+        */
         numberMarker();
 
         bytes memory context;
         if (mUserOp.paymaster != address(0)) {
             (context, paymasterValidationData) = _validatePaymasterPrepayment(opIndex, userOp, outOpInfo, requiredPreFund, gasUsedByValidateAccountPrepayment);
         }
-    unchecked {
-        uint256 gasUsed = preGas - gasleft();
-
-        if (userOp.verificationGasLimit < gasUsed) {
-            revert FailedOp(opIndex, "AA40 over verificationGasLimit");
+        unchecked {
+            uint256 gasUsed = preGas - gasleft(); // daewoo: verification阶段消耗的gas
+    
+            if (userOp.verificationGasLimit < gasUsed) {
+                revert FailedOp(opIndex, "AA40 over verificationGasLimit");
+            }
+            outOpInfo.prefund = requiredPreFund;
+            outOpInfo.contextOffset = getOffsetOfMemoryBytes(context); // daewoo: 默认为空
+            outOpInfo.preOpGas = preGas - gasleft() + userOp.preVerificationGas; // daewoo: 实际消耗的gas
         }
-        outOpInfo.prefund = requiredPreFund;
-        outOpInfo.contextOffset = getOffsetOfMemoryBytes(context);
-        outOpInfo.preOpGas = preGas - gasleft() + userOp.preVerificationGas;
-    }
     }
 
     /**
@@ -553,44 +565,45 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * @param context the context returned in validatePaymasterUserOp
      * @param actualGas the gas used so far by this user operation
      */
+     // daewoo: 在执行完 callData 后调用。如果定义了 paymaster，且其验证返回了一个非空上下文，则其后续操作会被调用。多余的金额将被退款到账户 (或 paymaster - 如果其在请求中使用了)。
     function _handlePostOp(uint256 opIndex, IPaymaster.PostOpMode mode, UserOpInfo memory opInfo, bytes memory context, uint256 actualGas) private returns (uint256 actualGasCost) {
         uint256 preGas = gasleft();
-    unchecked {
-        address refundAddress;
-        MemoryUserOp memory mUserOp = opInfo.mUserOp;
-        uint256 gasPrice = getUserOpGasPrice(mUserOp);
+        unchecked {
+            address refundAddress;
+            MemoryUserOp memory mUserOp = opInfo.mUserOp;
+            uint256 gasPrice = getUserOpGasPrice(mUserOp);
 
-        address paymaster = mUserOp.paymaster;
-        if (paymaster == address(0)) {
-            refundAddress = mUserOp.sender;
-        } else {
-            refundAddress = paymaster;
-            if (context.length > 0) {
-                actualGasCost = actualGas * gasPrice;
-                if (mode != IPaymaster.PostOpMode.postOpReverted) {
-                    IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost);
-                } else {
-                    // solhint-disable-next-line no-empty-blocks
-                    try IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost) {}
-                    catch Error(string memory reason) {
-                        revert FailedOp(opIndex, string.concat("AA50 postOp reverted: ", reason));
-                    }
-                    catch {
-                        revert FailedOp(opIndex, "AA50 postOp revert");
+            address paymaster = mUserOp.paymaster;
+            if (paymaster == address(0)) {
+                refundAddress = mUserOp.sender; // daewoo: 多余的资金退回合约钱包地址
+            } else {
+                refundAddress = paymaster;
+                if (context.length > 0) {
+                    actualGasCost = actualGas * gasPrice;
+                    if (mode != IPaymaster.PostOpMode.postOpReverted) { // daewoo: 表示执行成功
+                        IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost);
+                    } else {
+                        // solhint-disable-next-line no-empty-blocks
+                        try IPaymaster(paymaster).postOp{gas : mUserOp.verificationGasLimit}(mode, context, actualGasCost) {}
+                        catch Error(string memory reason) {
+                            revert FailedOp(opIndex, string.concat("AA50 postOp reverted: ", reason));
+                        }
+                        catch {
+                            revert FailedOp(opIndex, "AA50 postOp revert");
+                        }
                     }
                 }
             }
-        }
-        actualGas += preGas - gasleft();
-        actualGasCost = actualGas * gasPrice;
-        if (opInfo.prefund < actualGasCost) {
-            revert FailedOp(opIndex, "AA51 prefund below actualGasCost");
-        }
-        uint256 refund = opInfo.prefund - actualGasCost;
-        _incrementDeposit(refundAddress, refund);
-        bool success = mode == IPaymaster.PostOpMode.opSucceeded;
-        emit UserOperationEvent(opInfo.userOpHash, mUserOp.sender, mUserOp.paymaster, mUserOp.nonce, success, actualGasCost, actualGas);
-    } // unchecked
+            actualGas += preGas - gasleft();
+            actualGasCost = actualGas * gasPrice;
+            if (opInfo.prefund < actualGasCost) {
+                revert FailedOp(opIndex, "AA51 prefund below actualGasCost");
+            }
+            uint256 refund = opInfo.prefund - actualGasCost;
+            _incrementDeposit(refundAddress, refund);
+            bool success = mode == IPaymaster.PostOpMode.opSucceeded;
+            emit UserOperationEvent(opInfo.userOpHash, mUserOp.sender, mUserOp.paymaster, mUserOp.nonce, success, actualGasCost, actualGas);
+        } // unchecked
     }
 
     /**
@@ -598,15 +611,15 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * relayer/block builder might submit the TX with higher priorityFee, but the user should not
      */
     function getUserOpGasPrice(MemoryUserOp memory mUserOp) internal view returns (uint256) {
-    unchecked {
-        uint256 maxFeePerGas = mUserOp.maxFeePerGas;
-        uint256 maxPriorityFeePerGas = mUserOp.maxPriorityFeePerGas;
-        if (maxFeePerGas == maxPriorityFeePerGas) {
-            //legacy mode (for networks that don't support basefee opcode)
-            return maxFeePerGas;
+        unchecked {
+            uint256 maxFeePerGas = mUserOp.maxFeePerGas;
+            uint256 maxPriorityFeePerGas = mUserOp.maxPriorityFeePerGas;
+            if (maxFeePerGas == maxPriorityFeePerGas) {
+                //legacy mode (for networks that don't support basefee opcode)
+                return maxFeePerGas;
+            }
+            return min(maxFeePerGas, maxPriorityFeePerGas + block.basefee);
         }
-        return min(maxFeePerGas, maxPriorityFeePerGas + block.basefee);
-    }
     }
 
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
@@ -617,6 +630,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         assembly {offset := data}
     }
 
+    // daewoo: 将 offset 的二进制表示存储在 bytes memory 类型的变量 data 中,通过在汇编语言中设置寄存器 r1 的值来实现的
     function getMemoryBytesFromOffset(uint256 offset) internal pure returns (bytes memory data) {
         assembly {data := offset}
     }
@@ -624,8 +638,14 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
     //place the NUMBER opcode in the code.
     // this is used as a marker during simulation, as this OP is completely banned from the simulated code of the
     // account and paymaster.
+    /*
+        daewoo:
+        函数体中，使用 assembly 模块中的 mstore 指令将一个整数类型的 number() 操作数存储到内存的零位置。
+        这里使用了 mstore(0, number()) 的语法，其中 0 表示内存地址，number() 表示要存储的操作数
+        作为一个marker用于simulated过程对代码块的识别
+    */
     function numberMarker() internal view {
-        assembly {mstore(0, number())}
+        assembly {mstore(0, number())}  
     }
 }
 

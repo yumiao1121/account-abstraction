@@ -23,14 +23,14 @@ import {calldataKeccak} from "../core/Helpers.sol";
 
         address sender;
         uint256 nonce;
-        bytes initCode;
-        bytes callData;
+        bytes initCode; // daewoo: 如果sender存在且initCode也存在时非法；包含工厂合约地址和初始化合约钱包的代码
+        bytes callData; 
         uint256 callGasLimit;
         uint256 verificationGasLimit;
-        uint256 preVerificationGas;
+        uint256 preVerificationGas; // daewoo: 用于补偿bundler预验证
         uint256 maxFeePerGas;
         uint256 maxPriorityFeePerGas;
-        bytes paymasterAndData;
+        bytes paymasterAndData; // daewoo: 包含paymaster地址
         bytes signature;
     }
 

@@ -32,5 +32,6 @@ interface IAggregator {
      * @param userOps array of UserOperations to collect the signatures from.
      * @return aggregatedSignature the aggregated signature
      */
+     // daewoo: 将多个签名合并为一个签名。该方法在链下调用来计算与 handleOps() 方法一起传递的签名。bundler 可以使用优化的自定义代码进行此聚合
     function aggregateSignatures(UserOperation[] calldata userOps) external view returns (bytes memory aggregatedSignature);
 }

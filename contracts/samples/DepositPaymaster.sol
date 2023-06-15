@@ -157,10 +157,10 @@ contract DepositPaymaster is BasePaymaster {
         uint256 actualTokenCost = (actualGasCost + COST_OF_POST * gasPricePostOp) * maxTokenCost / maxCost;
         if (mode != PostOpMode.postOpReverted) {
             // attempt to pay with tokens:
-            token.safeTransferFrom(account, address(this), actualTokenCost);
+            token.safeTransferFrom(account, address(this), actualTokenCost); // daewoo: 从钱包合约向paymaster支付postop的费用
         } else {
             //in case above transferFrom failed, pay with deposit:
-            balances[token][account] -= actualTokenCost;
+            balances[token][account] -= actualTokenCost; // daewoo: TODO： 为啥不直接从balancesz支付
         }
         balances[token][owner()] += actualTokenCost;
     }

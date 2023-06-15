@@ -67,6 +67,13 @@ interface IEntryPoint is IStakeManager, INonceManager {
      *   Should be caught in off-chain handleOps simulation and not happen on-chain.
      *   Useful for mitigating DoS attempts against batchers or for troubleshooting of factory/account/paymaster reverts.
      */
+     /*
+        daewoo:
+        这是一种自定义的 handleOps 回滚错误。注意：如果模拟验证成功，则 handleOps 不应该出现该失败。
+        @param opIndex - 操作数组中失败的操作索引 (在模拟验证中，此总是为零)。
+        @param reason - 回滚原因。该字符串以独特的代码“AAmn”开头，其中“m”代表工厂、账户或支付 master 问题，以便失败可以归因于正确的实体。
+        应该在离线 handleOps 模拟中捕获，而不是在链上发生。可用于缓解批量攻击或解决工厂/账户/支付 master 回滚的问题
+     */
     error FailedOp(uint256 opIndex, string reason);
 
     /**
@@ -108,6 +115,7 @@ interface IEntryPoint is IStakeManager, INonceManager {
     error ExecutionResult(uint256 preOpGas, uint256 paid, uint48 validAfter, uint48 validUntil, bool targetSuccess, bytes targetResult);
 
     //UserOps handled, per aggregator
+    // daewoo: 这里的Aggregator聚合的是多个UserOperation
     struct UserOpsPerAggregator {
         UserOperation[] userOps;
 
@@ -125,6 +133,7 @@ interface IEntryPoint is IStakeManager, INonceManager {
      * @param ops the operations to execute
      * @param beneficiary the address to receive the fees
      */
+     // daewoo: 这个方法不会使用聚合签名，需要使用聚合签名的userOP在模拟阶段就会返回聚合签名地址，并在实际调用handleAggregatedOps处理
     function handleOps(UserOperation[] calldata ops, address payable beneficiary) external;
 
     /**
@@ -148,6 +157,12 @@ interface IEntryPoint is IStakeManager, INonceManager {
      * @dev this method always revert. Successful result is ValidationResult error. other errors are failures.
      * @dev The node must also verify it doesn't use banned opcodes, and that it doesn't reference storage outside the account's data.
      * @param userOp the user operation to validate.
+     */
+     /*
+        Simulate调用 validateUserOp 和 validatePaymasterUserOp 方法。
+        @dev 该方法一定会revert。ValidationResulterr返回表示成功。其他错误视为失败。
+        @dev 方法必须验证不使用禁止的 OPCODES，并且不引用超出账户数据存储的区域。
+        @param userOp 要验证的用户操作。
      */
     function simulateValidation(UserOperation calldata userOp) external;
 
@@ -200,6 +215,9 @@ interface IEntryPoint is IStakeManager, INonceManager {
      *        are set to the return from that call.
      * @param targetCallData callData to pass to target address
      */
+     /* daewoo: simulate UserOperation的全部执行（包括validation和execution），这个方法的执行会revert ExecutionResult
+        该方法会执行UserOperation的全部validation， 但是会忽略签名错误，
+    */
     function simulateHandleOp(UserOperation calldata op, address target, bytes calldata targetCallData) external;
 }
 

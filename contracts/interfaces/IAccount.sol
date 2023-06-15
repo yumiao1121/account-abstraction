@@ -29,6 +29,18 @@ interface IAccount {
      *      If an account doesn't use time-range, it is enough to return SIG_VALIDATION_FAILED value (1) for signature failure.
      *      Note that the validation code cannot use block.timestamp (or block.number) directly.
      */
+     /*
+        daewoo:
+        这段代码是用于验证用户签名和令牌的。
+        如果签名失败，则应该返回 SIG_VALIDATION_FAILED(1) 信号。这允许在没有有效签名的情况下进行“模拟调用”。其他失败情况 (例如nonce不匹配或无效的签名格式) 仍然会发出失败信号。
+
+        @dev 注释指出必须验证调用者是 entryPoint。必须验证签名和nonce。
+        返回的 validationData 结构已被打包。使用_packValidationData和_unpackValidationData函数进行编码和解码。@param sigAuthorizer 参数是有效的签名标识符，为 0。
+        如果签名失败，则为 1。否则，它是“authorizer”合同的地址。
+        @param validUntil 参数是此操作有效的最后时间戳。0 表示“无限期”。
+        @param validAfter 参数是此操作有效的最早时间戳。如果账户不使用时间范围，则 SIG_VALIDATION_FAILED 值 (1) 就足够了。
+        注意，验证代码不能直接使用 block.timestamp(或 block.number)。
+     */
     function validateUserOp(UserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
     external returns (uint256 validationData);
 }

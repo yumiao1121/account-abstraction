@@ -16,7 +16,7 @@ import "./Helpers.sol";
  */
 abstract contract BasePaymaster is IPaymaster, Ownable {
 
-    IEntryPoint immutable public entryPoint;
+    IEntryPoint immutable public entryPoint; // daewoo: 传入entryPoint合约地址
 
     constructor(IEntryPoint _entryPoint) {
         entryPoint = _entryPoint;

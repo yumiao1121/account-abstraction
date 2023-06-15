@@ -12,6 +12,7 @@ interface INonceManager {
      * @param key the high 192 bit of the nonce
      * @return nonce a full nonce to pass for next UserOp with this sender.
      */
+     // daewoo: 同个key， nonce值随着每个userop递增，是连续的，不同的key不一定
     function getNonce(address sender, uint192 key)
     external view returns (uint256 nonce);
 

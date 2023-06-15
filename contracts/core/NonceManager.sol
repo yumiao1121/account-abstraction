@@ -31,10 +31,10 @@ contract NonceManager is INonceManager {
      * called just after validateUserOp()
      */
     function _validateAndUpdateNonce(address sender, uint256 nonce) internal returns (bool) {
-
+        
         uint192 key = uint192(nonce >> 64);
         uint64 seq = uint64(nonce);
-        return nonceSequenceNumber[sender][key]++ == seq;
+        return nonceSequenceNumber[sender][key]++ == seq; // daewoo: 将nonce拆成前192位作为key，后64位作为value
     }
 
 }

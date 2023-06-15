@@ -39,10 +39,11 @@ abstract contract BaseAccount is IAccount {
      * Validate user's signature and nonce.
      * subclass doesn't need to override this method. Instead, it should override the specific internal validation methods.
      */
+     // daewoo: 验证用户签名和nonce
     function validateUserOp(UserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
     external override virtual returns (uint256 validationData) {
-        _requireFromEntryPoint();
-        validationData = _validateSignature(userOp, userOpHash);
+        _requireFromEntryPoint(); // daewoo: 校验函数者是否是EntryPoint合约
+        validationData = _validateSignature(userOp, userOpHash); // daewoo: 通过userOpHash和sig获得sender与合约钱包地址是否一致
         _validateNonce(userOp.nonce);
         _payPrefund(missingAccountFunds);
     }
@@ -100,7 +101,7 @@ abstract contract BaseAccount is IAccount {
     function _payPrefund(uint256 missingAccountFunds) internal virtual {
         if (missingAccountFunds != 0) {
             (bool success,) = payable(msg.sender).call{value : missingAccountFunds, gas : type(uint256).max}("");
-            (success);
+            (success); // daewoo: 表示打印到控制台
             //ignore failure (its EntryPoint's job to verify, not account.)
         }
     }

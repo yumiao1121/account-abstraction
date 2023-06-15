@@ -13,15 +13,16 @@ pragma solidity ^0.8.12;
  * @param validaUntil - this UserOp is valid only up to this timestamp.
  */
     struct ValidationData {
-        address aggregator;
-        uint48 validAfter;
-        uint48 validUntil;
+        address aggregator; // daewoo: 0表示没有aggregator， 1表示验证签名失败， 其他表示aggregator地址
+        uint48 validAfter; // daewoo: userOp在该区块高度后有效
+        uint48 validUntil; // daewoo: userOp在该区块高度前有效
     }
 
 //extract sigFailed, validAfter, validUntil.
 // also convert zero validUntil to type(uint48).max
+// daewoo:  160 - 0: aggregator地址， 208- 161: validUntil, 255 - 209: validAfter
     function _parseValidationData(uint validationData) pure returns (ValidationData memory data) {
-        address aggregator = address(uint160(validationData));
+        address aggregator = address(uint160(validationData)); // daewoo: 低160位是聚合签名合约地址
         uint48 validUntil = uint48(validationData >> 160);
         if (validUntil == 0) {
             validUntil = type(uint48).max;
